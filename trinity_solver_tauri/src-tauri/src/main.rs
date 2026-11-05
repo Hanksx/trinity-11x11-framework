@@ -82,6 +82,41 @@ fn solver_status(app: tauri::AppHandle) -> serde_json::Value {
         "capabilities":["linear_system","anomaly_scan","relation_search"],
         "e11_decision_policy_active":false})
 }
+// Read one JSON-lines response with a strict cap before allocating more memory.
+// This prevents a misbehaving Python process from exhausting the GUI process.
+fn read_bounded_line<R: BufRead>(reader: &mut R, cap: usize) -> Result<Option<Vec<u8>>, String> {
+    let mut out = Vec::new();
+    loop {
+        let buf = reader
+            .fill_buf()
+            .map_err(|e| format!("Erro de leitura do worker: {e}"))?;
+        if buf.is_empty() {
+            return if out.is_empty() {
+                Ok(None)
+            } else {
+                Err("Worker encerrou a resposta sem nova linha".into())
+            };
+        }
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let take = newline.map_or(buf.len(), |idx| idx + 1);
+        if take > cap.saturating_sub(out.len()) {
+            return Err("Resposta do worker excedeu 2 MB".into());
+        }
+        out.extend_from_slice(&buf[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(Some(out));
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WorkerTimings {
+    startup_ms: f64,
+    request_ms: f64,
+    reused: bool,
+}
+
 // A local long-lived Python worker amortizes interpreter and NumPy startup.
 // JSON-lines protocol, one request at a time, no network listener.
 struct PythonWorker {
@@ -107,16 +142,15 @@ impl PythonWorker {
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
-                let mut line = Vec::new();
-                match reader.read_until(b'\n', &mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
+                match read_bounded_line(&mut reader, 2_000_001) {
+                    Ok(Some(line)) => {
                         if tx.send(Ok(line)).is_err() {
                             break;
                         }
                     }
+                    Ok(None) => break,
                     Err(err) => {
-                        let _ = tx.send(Err(format!("Falha na leitura do worker: {err}")));
+                        let _ = tx.send(Err(err));
                         break;
                     }
                 }
@@ -157,19 +191,37 @@ impl Drop for PythonWorker {
     }
 }
 
-fn run_python(py: PathBuf, script: PathBuf, data: String) -> Result<serde_json::Value, String> {
+fn run_python(
+    py: PathBuf,
+    script: PathBuf,
+    data: String,
+) -> Result<(serde_json::Value, WorkerTimings), String> {
     static WORKER: OnceLock<Mutex<Option<PythonWorker>>> = OnceLock::new();
     let state = WORKER.get_or_init(|| Mutex::new(None));
     let mut guard = state.lock().map_err(|_| "Worker Python: estado inválido")?;
+    let reused = guard.is_some();
+    let init = Instant::now();
     if guard.is_none() {
         *guard = Some(PythonWorker::start(&py, &script)?);
     }
+    let startup_ms = init.elapsed().as_secs_f64() * 1000.0;
+    let roundtrip = Instant::now();
     let result = guard.as_mut().expect("worker initialized").request(&data);
+    let request_ms = roundtrip.elapsed().as_secs_f64() * 1000.0;
     if result.is_err() {
-        // Restart the worker on the next call. Kill also covers timeouts.
+        // A failed request discards the child, including when the pipe hits a limit.
         *guard = None;
     }
-    result
+    result.map(|value| {
+        (
+            value,
+            WorkerTimings {
+                startup_ms,
+                request_ms,
+                reused,
+            },
+        )
+    })
 }
 
 #[tauri::command]
@@ -181,13 +233,34 @@ async fn solver_run(
     if !problem.is_object() {
         return Err("Problema deve ser objeto JSON".into());
     }
+    let start = Instant::now();
     let py = python_with_numpy()?;
+    let python_probe_ms = start.elapsed().as_secs_f64() * 1000.0;
     let script = backend_path(&app)?;
+    let backend_resolve_ms = start.elapsed().as_secs_f64() * 1000.0 - python_probe_ms;
     let request = serde_json::json!({"problem":problem,"seed":seed}).to_string();
-    tauri::async_runtime::spawn_blocking(move || run_python(py, script, request))
-        .await
-        .map_err(|e| format!("Falha no executor: {e}"))?
+    let (mut answer, worker) =
+        tauri::async_runtime::spawn_blocking(move || run_python(py, script, request))
+            .await
+            .map_err(|e| format!("Falha no executor: {e}"))??;
+    let rust_total_ms = start.elapsed().as_secs_f64() * 1000.0;
+    // Numeric diagnostics only: no paths, secret tokens or private inputs.
+    if let Some(top) = answer.as_object_mut() {
+        top.insert(
+            "bridge_metrics".into(),
+            serde_json::json!({
+                "rust_total_ms": rust_total_ms,
+                "python_probe_ms": python_probe_ms,
+                "backend_resolve_ms": backend_resolve_ms,
+                "worker_start_ms": worker.startup_ms,
+                "worker_roundtrip_ms": worker.request_ms,
+                "worker_reused": worker.reused
+            }),
+        );
+    }
+    Ok(answer)
 }
+
 /// Run user-provided *trusted* Python code, maintaining the legacy Target API.
 /// The script has the invoking user's local filesystem permissions, as the old app did.
 /// Output goes to temporary files to avoid pipe deadlocks with verbose targets.
@@ -309,6 +382,38 @@ fn main() {
 mod target_tests {
     use super::*;
     #[test]
+    fn worker_line_limit_accepts_small_and_rejects_huge() {
+        let mut small = BufReader::new(std::io::Cursor::new(b"{\"ok\":true}\n"));
+        assert_eq!(
+            read_bounded_line(&mut small, 2_000_001).unwrap().unwrap(),
+            b"{\"ok\":true}\n"
+        );
+        let mut large = BufReader::new(std::io::Cursor::new(vec![b'x'; 2_000_010]));
+        assert!(read_bounded_line(&mut large, 2_000_001)
+            .unwrap_err()
+            .contains("2 MB"));
+    }
+
+    #[test]
+    fn worker_timings_show_first_start_and_second_reuse() {
+        let py = python_with_numpy().expect("NumPy requerido");
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("solver_backend/runner.py");
+        let payload = r#"{"problem":{"kind":"linear_system","A":[[2]],"b":[6]}}"#.into();
+        let (first, m1) = run_python(py.clone(), script.clone(), payload).unwrap();
+        assert_eq!(first["ok"], true);
+        assert!(!m1.reused);
+        assert!(m1.request_ms > 0.0);
+        let (second, m2) = run_python(
+            py,
+            script,
+            r#"{"problem":{"kind":"linear_system","A":[[3]],"b":[12]}}"#.into(),
+        )
+        .unwrap();
+        assert_eq!(second["ok"], true);
+        assert!(m2.reused);
+        assert!(m2.request_ms > 0.0);
+    }
+    #[test]
     fn persistent_worker_reuses_child() {
         let py = python_with_numpy().expect("Python+NumPy required");
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("solver_backend/runner.py");
@@ -335,10 +440,11 @@ mod target_tests {
             std::env::temp_dir().join(format!("trinity_bridge_large_{}.py", std::process::id()));
         fs::write(
             &temp,
-            "import json\nprint(json.dumps({'ok': True, 'payload': 'A' * 200000}))\n",
+            "import json,sys\nfor line in sys.stdin:\n print(json.dumps({'ok': True, 'payload': 'A' * 200000}),flush=True)\n",
         )
         .unwrap();
-        let output = run_python(py, temp.clone(), "{}".into());
+        let mut worker = PythonWorker::start(&py, &temp).expect("start output test worker");
+        let output = worker.request("{}");
         let _ = fs::remove_file(temp);
         let output = output.expect("large JSON must not deadlock");
         assert_eq!(output["ok"], true);

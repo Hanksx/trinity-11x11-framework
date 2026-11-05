@@ -61,3 +61,16 @@ network server is exposed. The worker restarts after an I/O error or timeout
 processes; they are **not** a security sandbox. The worker startup cost is
 paid on the first call. The persistent protocol is covered by Python and Rust
 tests. Performance benchmarks are stored privately outside this repository.
+
+### Bridge diagnostics and macOS CI artifact
+
+Each solver_run response includes bridge_metrics with Rust-side timing
+(in milliseconds): python_probe_ms, backend_resolve_ms, worker_start_ms,
+worker_roundtrip_ms, rust_total_ms, and worker_reused.
+Compare with JavaScript wall time to diagnose cold starts. These are bridge
+timings, not numerical algorithm speedup results.
+
+Successful macOS Intel CI runs also upload a temporary
+trinity-solver-macos-intel-unsigned artifact containing a ZIP built with
+ditto to preserve macOS app permissions. This build is unsigned and
+unnotarized and still requires Python plus NumPy installed separately.

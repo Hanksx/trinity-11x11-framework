@@ -52,3 +52,17 @@ Os Target Scripts continuam sendo processos independentes com as permissões
 do usuário, e **não** executam em sandbox. A primeira chamada ainda paga o
 custo de inicialização. Os testes Python e Rust verificam o protocolo. Os
 benchmarks permanecem privados, fora do repositório público.
+
+### Diagnóstico de latência e pacote macOS
+
+Toda resposta solver_run traz um objeto bridge_metrics com os tempos medidos
+pela camada Rust (em milissegundos): python_probe_ms,
+backend_resolve_ms, worker_start_ms, worker_roundtrip_ms,
+rust_total_ms e o indicador worker_reused.
+Compare esses dados com o tempo total observado pelo JavaScript para investigar
+a primeira chamada. Os números não representam aceleração dos algoritmos.
+
+Em uma execução aprovada do GitHub Actions, o job macOS disponibiliza um ZIP
+do aplicativo sem assinatura e sem notarização, como artefato temporário
+(trinity-solver-macos-intel-unsigned). O pacote ainda depende de um Python
+com NumPy instalado e não é um instalador independente.
