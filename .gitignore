@@ -36,3 +36,6 @@ cache/
 
 # Synced from the single authoritative core file on each build
 trinity_solver_tauri/src-tauri/solver_backend/trinity_solver_engine_v1.py
+
+# Tauri-generated schemas (recreated during Rust build)
+trinity_solver_tauri/src-tauri/gen/

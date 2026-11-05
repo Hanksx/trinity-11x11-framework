@@ -28,3 +28,23 @@ License has not yet been selected. Publishing source code by itself does not
 grant permissions beyond those already applicable to any third-party dependencies.
 
 For trusted Target scripts importing the core, set TRINITY_WORKSPACE to your clone directory before launching the desktop application.
+
+## Continuous integration
+
+GitHub Actions runs the Python core + packaged Python bridge tests on Python 3.11–3.13,
+the TypeScript/Vite frontend build on Node.js 22, and a native macOS Intel job
+that compiles Rust, runs Rust tests and builds a Tauri `.app` bundle.
+
+The macOS CI is a build verification, **not** a notarized application release or
+an end-to-end GUI test. The packaged app needs a local Python installation with
+NumPy available; it does not currently bundle a Python runtime or NumPy wheels.
+Configure `TRINITY_PYTHON` with the Python interpreter path when necessary.
+
+**Target Scripts are privileged local code**, not a sandbox. Only run scripts
+whose source you have reviewed and trust. They execute with your operating-system
+user's permissions and can access your filesystem. JavaScript Targets require
+dynamic code evaluation in the app's webview, so this mode carries additional risk.
+
+The linear-system capability delegates its numerical solve to NumPy.
+Automated tests check correctness and regressions; they do not prove a new
+algorithm, scientific discovery, or competitive performance.

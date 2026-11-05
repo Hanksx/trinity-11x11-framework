@@ -77,7 +77,10 @@ class TrinitySolverEngine:
         b = self._array(p.get('b'), 1, 'b', 200)
         if a.shape[0] != b.size or a.shape[1] > 100:
             raise ValueError('A columns <=100 and A rows equal b length required')
-        rank = int(np.linalg.matrix_rank(a))
+        # Reuse one SVD for both rank determination and spectral norm.
+        singular_values = np.linalg.svd(a, compute_uv=False)
+        rank_tolerance = singular_values[0] * max(a.shape) * np.finfo(a.dtype).eps
+        rank = int(np.count_nonzero(singular_values > rank_tolerance))
         if a.shape[0] == a.shape[1] and rank == a.shape[1]:
             x = np.linalg.solve(a, b)
             method = 'numpy.linalg.solve'
@@ -87,7 +90,8 @@ class TrinitySolverEngine:
         residual = a @ x-b
         abs_residual = float(np.linalg.norm(residual))
         normal_residual = float(np.linalg.norm(a.T @ residual))
-        scale = 1+float(np.linalg.norm(a, 2))*float(np.linalg.norm(x))+float(np.linalg.norm(b))
+        # Preserve the previous exact spectral-norm verification threshold.
+        scale = 1+float(singular_values[0])*float(np.linalg.norm(x))+float(np.linalg.norm(b))
         verified = bool(np.isfinite(x).all() and
                         normal_residual <= 1e-8*scale and
                         (method == 'numpy.linalg.lstsq' or abs_residual <= 1e-8*scale))
