@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use std::io::{BufRead, BufReader};
+use std::process::{Child, ChildStdin};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
+
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -36,6 +40,11 @@ fn candidate_pythons() -> Vec<PathBuf> {
     out
 }
 fn python_with_numpy() -> Result<PathBuf, String> {
+    // The Python/NumPy probe itself can take ~150 ms. Resolve it once per app.
+    static PYTHON: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    PYTHON.get_or_init(find_python_with_numpy).clone()
+}
+fn find_python_with_numpy() -> Result<PathBuf, String> {
     for path in candidate_pythons() {
         if let Ok(o) = Command::new(&path)
             .arg("-c")
@@ -73,85 +82,94 @@ fn solver_status(app: tauri::AppHandle) -> serde_json::Value {
         "capabilities":["linear_system","anomaly_scan","relation_search"],
         "e11_decision_policy_active":false})
 }
-// Drain both pipes while waiting for the child. Waiting before reading may
-// deadlock when Python writes more data than the operating system pipe holds.
-fn drain_limited<R: Read + Send + 'static>(
-    mut pipe: R,
-) -> thread::JoinHandle<Result<(Vec<u8>, bool), String>> {
-    thread::spawn(move || {
-        let mut captured = Vec::new();
-        let mut truncated = false;
-        let mut block = [0u8; 8192];
-        loop {
-            let read = pipe
-                .read(&mut block)
-                .map_err(|e| format!("Erro de leitura do subprocesso: {e}"))?;
-            if read == 0 {
-                break;
-            }
-            let remaining = 2_000_000usize.saturating_sub(captured.len());
-            captured.extend_from_slice(&block[..read.min(remaining)]);
-            if read > remaining {
-                truncated = true;
-            }
-        }
-        Ok((captured, truncated))
-    })
+// A local long-lived Python worker amortizes interpreter and NumPy startup.
+// JSON-lines protocol, one request at a time, no network listener.
+struct PythonWorker {
+    child: Child,
+    stdin: ChildStdin,
+    replies: mpsc::Receiver<Result<Vec<u8>, String>>,
 }
-fn run_python(py: PathBuf, script: PathBuf, data: String) -> Result<serde_json::Value, String> {
-    if data.len() > 2_000_000 {
-        return Err("Entrada excede 2 MB".into());
+
+impl PythonWorker {
+    fn start(py: &PathBuf, script: &PathBuf) -> Result<Self, String> {
+        let mut child = Command::new(py)
+            .arg("-u")
+            .arg(script)
+            .arg("--serve")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Falha ao iniciar worker Python: {e}"))?;
+        let stdin = child.stdin.take().ok_or("stdin do worker indisponível")?;
+        let stdout = child.stdout.take().ok_or("stdout do worker indisponível")?;
+        let (tx, replies) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = Vec::new();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if tx.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Err(format!("Falha na leitura do worker: {err}")));
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            stdin,
+            replies,
+        })
     }
-    let mut child = Command::new(py)
-        .arg(&script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Falha ao executar Python: {e}"))?;
-    let stdout = drain_limited(child.stdout.take().ok_or("stdout não disponível")?);
-    let stderr = drain_limited(child.stderr.take().ok_or("stderr não disponível")?);
-    let write_error = if let Some(mut stdin) = child.stdin.take() {
-        stdin
+
+    fn request(&mut self, data: &str) -> Result<serde_json::Value, String> {
+        if data.len() > 2_000_000 {
+            return Err("Entrada excede 2 MB".into());
+        }
+        self.stdin
             .write_all(data.as_bytes())
-            .err()
-            .map(|e| format!("Falha de comunicação: {e}"))
-    } else {
-        None
-    };
-    let start = Instant::now();
-    let mut timeout = false;
-    let status = loop {
-        if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
-            break st;
+            .and_then(|_| self.stdin.write_all(b"\n"))
+            .and_then(|_| self.stdin.flush())
+            .map_err(|e| format!("Falha ao enviar problema ao Python: {e}"))?;
+        let reply = self
+            .replies
+            .recv_timeout(Duration::from_secs(35))
+            .map_err(|e| format!("Worker Python indisponível ou excedeu 35 segundos: {e}"))??;
+        if reply.len() > 2_000_001 {
+            return Err("Resposta do worker excedeu 2 MB".into());
         }
-        if start.elapsed() > Duration::from_secs(35) {
-            timeout = true;
-            let _ = child.kill();
-            break child.wait().map_err(|e| e.to_string())?;
-        }
-        thread::sleep(Duration::from_millis(20));
-    };
-    let (stdout, too_long_stdout) = stdout.join().map_err(|_| "Falha na leitura de stdout")??;
-    let (stderr, too_long_stderr) = stderr.join().map_err(|_| "Falha na leitura de stderr")??;
-    if let Some(err) = write_error {
-        return Err(err);
+        serde_json::from_slice(&reply)
+            .map_err(|e| format!("Resposta inválida do worker Python: {e}"))
     }
-    if timeout {
-        return Err("Solver excedeu limite de 35 segundos".into());
+}
+
+impl Drop for PythonWorker {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
-    if too_long_stdout || too_long_stderr {
-        return Err("Saída do Solver excedeu limite de 2 MB".into());
+}
+
+fn run_python(py: PathBuf, script: PathBuf, data: String) -> Result<serde_json::Value, String> {
+    static WORKER: OnceLock<Mutex<Option<PythonWorker>>> = OnceLock::new();
+    let state = WORKER.get_or_init(|| Mutex::new(None));
+    let mut guard = state.lock().map_err(|_| "Worker Python: estado inválido")?;
+    if guard.is_none() {
+        *guard = Some(PythonWorker::start(&py, &script)?);
     }
-    if !status.success() {
-        return Err(format!(
-            "Processo Python falhou: {}",
-            String::from_utf8_lossy(&stderr)
-        ));
+    let result = guard.as_mut().expect("worker initialized").request(&data);
+    if result.is_err() {
+        // Restart the worker on the next call. Kill also covers timeouts.
+        *guard = None;
     }
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&stdout).map_err(|e| format!("Resposta inválida do Solver: {e}"))?;
-    Ok(parsed)
+    result
 }
 
 #[tauri::command]
@@ -290,6 +308,25 @@ fn main() {
 #[cfg(test)]
 mod target_tests {
     use super::*;
+    #[test]
+    fn persistent_worker_reuses_child() {
+        let py = python_with_numpy().expect("Python+NumPy required");
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("solver_backend/runner.py");
+        let mut worker = PythonWorker::start(&py, &script).unwrap();
+        let first_pid = worker.child.id();
+        let first = worker
+            .request(r#"{"problem":{"kind":"linear_system","A":[[2]],"b":[6]}}"#)
+            .expect("first solver request failed");
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"]["output"]["solution"][0], 3.0);
+        let second = worker
+            .request(r#"{"problem":{"kind":"linear_system","A":[[3]],"b":[12]}}"#)
+            .expect("second solver request failed");
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"]["output"]["solution"][0], 4.0);
+        assert_eq!(worker.child.id(), first_pid);
+        assert!(worker.child.try_wait().unwrap().is_none());
+    }
     #[test]
     fn solver_bridge_drains_large_json_without_deadlock() {
         use std::fs;

@@ -39,3 +39,16 @@ usuário. Não são isolados em sandbox. Scripts JavaScript usam avaliação
 **Desempenho:** a solução de sistemas lineares usa NumPy internamente;
 resultado numericamente correto não implica superioridade sobre NumPy/SciPy.
 Experimentos e benchmarks privados não fazem parte deste repositório.
+
+### Ponte Python persistente
+
+O aplicativo agora mantém um único processo Python para solicitações normais
+\`solver_run\`, trocando JSON delimitado por linhas via stdin/stdout local.
+Chamadas seguintes reutilizam o interpretador e a importação do NumPy, sem
+abrir porta de rede. O worker é reiniciado após erro ou timeout de 35 segundos;
+as respostas são limitadas a 2 MB.
+
+Os Target Scripts continuam sendo processos independentes com as permissões
+do usuário, e **não** executam em sandbox. A primeira chamada ainda paga o
+custo de inicialização. Os testes Python e Rust verificam o protocolo. Os
+benchmarks permanecem privados, fora do repositório público.

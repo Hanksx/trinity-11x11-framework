@@ -48,3 +48,16 @@ dynamic code evaluation in the app's webview, so this mode carries additional ri
 The linear-system capability delegates its numerical solve to NumPy.
 Automated tests check correctness and regressions; they do not prove a new
 algorithm, scientific discovery, or competitive performance.
+
+### Persistent solver bridge
+
+The desktop app now uses a single long-lived Python process for normal
+\`solver_run\` calls (newline-delimited JSON over local stdin/stdout). Repeated
+queries reuse the NumPy import and the Python interpreter; no socket or
+network server is exposed. The worker restarts after an I/O error or timeout
+(35 seconds), and responses are limited to 2 MB.
+
+\`run_python_script\` Target scripts remain separate, privileged one-shot
+processes; they are **not** a security sandbox. The worker startup cost is
+paid on the first call. The persistent protocol is covered by Python and Rust
+tests. Performance benchmarks are stored privately outside this repository.
