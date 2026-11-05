@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta name="theme-color" content="#0b1020"/><title>Trinity Solver · 11×11</title></head>
+<body><div id="app">
+<aside class="sidebar">
+  <div class="brand"><span class="brandmark"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><div><strong>TRINITY<span class="brand-accent">/</span>SOLVER</strong><small>FRAMEWORK 11×11</small></div></div>
+  <div class="sidebar-section">WORKSPACE</div>
+  <nav class="navigation" aria-label="Áreas do Solver">
+    <button class="nav-item selected" data-tab="targets"><span class="nav-icon">⌘</span> Target Scripts <span class="nav-arrow">›</span></button>
+    <button class="nav-item" data-tab="anomaly"><span class="nav-icon">⌁</span> Anomalias <span class="nav-arrow">›</span></button>
+    <button class="nav-item" data-tab="relation"><span class="nav-icon">⌘</span> Relações <span class="nav-arrow">›</span></button>
+    <button class="nav-item" data-tab="linear"><span class="nav-icon">⊞</span> Sistemas lineares <span class="nav-arrow">›</span></button>
+  </nav>
+  <div class="sidebar-section second">SISTEMA</div>
+  <div class="system-line"><span class="pulse" id="connectionLight"></span><span id="connectionStatus">Conectando motor...</span></div>
+  <div class="sidebar-bottom"><div class="tiny-heading">MOTOR ATIVO</div><div class="backend-name">Solver Engine <b>v1</b></div><p>Motor numérico clássico com validação independente. Política E11 em desenvolvimento.</p><div class="version">TRINITY DESKTOP <span>v5.0.0</span></div></div>
+</aside>
+<main class="main">
+  <header class="topbar"><span>TRINITY <span class="slash">/</span> WORKSPACE <span class="slash">/</span> <strong id="breadcrumb">ANOMALIAS</strong></span><div class="top-actions"><span class="top-chip">LOCAL · SEM NUVEM</span><span class="identity">11×11</span></div></header>
+  <div class="viewport">
+    <section class="hero"><div><div class="eyebrow"><span class="eyebrow-line"></span> LABORATÓRIO DE RESOLUÇÃO</div><h1 id="heroTitle">Detectar <em>anomalias.</em></h1><p id="heroDescription">Identifique observações atípicas em séries numéricas com estimadores robustos e diagnóstico reproduzível.</p></div><div class="hero-mark" aria-hidden="true"><div class="matrix-mark" id="matrixMark"></div></div></section>
+    <div class="stats">
+      <div class="stat"><div class="stat-title">MOTOR</div><div class="stat-main" id="statEngine">Verificando<span class="subtle-ellipsis">...</span></div><div class="stat-foot">Python + NumPy</div></div>
+      <div class="stat"><div class="stat-title">MÉTODOS</div><div class="stat-main">03<span class="unit">disponíveis</span></div><div class="stat-foot">Registro de capacidades</div></div>
+      <div class="stat"><div class="stat-title">VERIFICAÇÃO</div><div class="stat-main">Ativa<span class="unit">por tarefa</span></div><div class="stat-foot">Resultados auditáveis</div></div>
+      <div class="stat"><div class="stat-title">EXECUÇÕES LOCAIS</div><div class="stat-main" id="statRuns">0</div><div class="stat-foot">Nesta instalação</div></div>
+    </div>
+    <section class="target-workspace hidden" id="targetWorkspace" aria-label="Editor de Target Scripts">
+      <div class="target-editor-pane">
+        <div class="target-head">
+          <div><div class="section-kicker">01 / TARGET SCRIPT</div><h2>Editor de scripts</h2><p>Execute seus Targets em JavaScript (com <code>invoke()</code> e <code>log()</code>) ou Python local.</p></div>
+          <span class="tag">SCRIPT TARGET</span>
+        </div>
+        <div class="target-toolbar">
+          <label class="mode-label" for="targetMode">LINGUAGEM</label>
+          <select id="targetMode" class="target-select"><option value="javascript">JavaScript / await invoke</option><option value="python">Python 3</option></select>
+          <button id="targetExampleBtn" class="text-button" type="button">Carregar exemplo</button>
+        </div>
+        <textarea id="scriptInput" class="target-textarea" spellcheck="false" aria-label="Cole seu Target Script aqui"></textarea>
+        <div class="target-footer"><span id="targetSize">0 bytes · salvo localmente</span><div class="target-actions"><button id="targetGuideBtn" class="secondary-btn target-guide-cta" type="button" title="Copiar guia completo de Target Scripts" aria-label="Copiar guia de Target Scripts">📋 Copiar Guia 5.0</button><button id="targetLegacyGuideBtn" class="secondary-btn target-legacy-guide-btn" type="button" title="Copiar o guia original da 4.5, com comandos 128Q históricos que não estão na 5.0.1">Guia 4.5</button><span id="targetGuideFeedback" class="target-guide-feedback" role="status" aria-live="polite"></span><button id="targetClearBtn" class="secondary-btn" type="button">Limpar script</button><button id="runTargetBtn" class="primary-btn" type="button"><span class="play-icon">▶</span> Run Target <span>↗</span></button></div></div>
+        <p class="target-guide-version-note">Guia 5.0: API real, módulos, exemplos e limites. Guia 4.5: referência histórica; comandos 128Q não portados.</p>
+      </div>
+      <div class="target-output-pane">
+        <div class="target-head output-head"><div><div class="section-kicker">02 / CONSOLE</div><h2>Saída do Target</h2><p id="targetStatus">Pronto para executar.</p></div><button class="text-button" id="copyTargetOutputBtn">Copiar output</button></div>
+        <pre id="targetLog" class="target-console" aria-label="Saída da execução do script">// Aguardando execução do Target...</pre>
+        <div class="target-console-foot"><span>EXECUÇÃO LOCAL · PYTHON / TAURI</span><span id="targetElapsed">00:00</span></div>
+      </div>
+    </section>
+    <div class="columns" id="numericWorkspace">
+      <section class="pane editor-pane"><div class="pane-header"><div><div class="section-kicker">01 / ENTRADA</div><h2>Definição do problema</h2></div><span class="tag">JSON</span></div><p class="pane-description" id="editorHelp">Forneça uma série numérica e um limiar de detecção.</p><div class="editor-top"><span class="filename" id="inputFilename">anomaly_scan.json</span><button class="text-button" id="sampleBtn" type="button">Restaurar exemplo</button></div><textarea id="problemInput" class="code-editor" spellcheck="false" aria-label="Definição do problema em JSON"></textarea><div class="editor-bottom"><span id="validationStatus">Entrada aguardando validação</span><span id="sizeCounter">0 bytes</span></div><div class="input-footer"><label class="seed-input">SEMENTE <input id="seedInput" type="number" value="5711" step="1" /></label><button id="runBtn" class="primary-btn"><span class="play-icon">▶</span> Executar análise <span>↗</span></button></div></section>
+      <section class="pane result-pane"><div class="pane-header"><div><div class="section-kicker">02 / SAÍDA VERIFICADA</div><h2>Resultado da execução</h2></div><span class="tag muted" id="resultTag">SEM EXECUÇÃO</span></div><div class="empty-state" id="emptyState"><div class="empty-symbol">⌁</div><h3>Pronto para explorar.</h3><p>Execute o problema à esquerda. O motor retornará diagnóstico, evidências e limitações do método.</p></div><div id="resultContent" class="result-content hidden"><div class="result-overview"><div class="result-icon" id="resultIcon">✓</div><div><div class="result-status" id="resultStatus">Concluído</div><div class="result-substatus" id="resultSubstatus">Verificação concluída</div></div></div><div id="metrics" class="metric-grid"></div><div id="visualization" class="visualization"></div><div class="result-section-title">RESULTADO E DIAGNÓSTICOS</div><pre class="result-json" id="resultJson"></pre><div class="caveat" id="caveat"></div></div></section>
+    </div>
+    <section class="history-panel"><div class="history-head"><div><div class="section-kicker">03 / RASTREABILIDADE</div><h2>Execuções recentes</h2></div><button class="text-button" id="clearHistory">Limpar histórico local</button></div><div id="historyList" class="history-list"><span class="history-empty">Nenhuma execução registrada.</span></div></section>
+    <footer>TRINITY 11×11 <span>∙</span> MÉTODOS NUMÉRICOS REPRODUZÍVEIS <span>∙</span> INDÍCIOS ESTATÍSTICOS NÃO CONSTITUEM PROVA FÍSICA</footer>
+  </div>
+</main></div><script type="module" src="/src/main.ts"></script></body></html>

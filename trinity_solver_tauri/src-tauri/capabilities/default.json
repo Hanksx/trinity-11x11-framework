@@ -1,0 +1,1 @@
+{"$schema":"https://schema.tauri.app/config/2","identifier":"default","description":"Trinity Solver minimal application permissions","windows":["main"],"permissions":["core:default"]}
